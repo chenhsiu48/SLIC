@@ -37,15 +37,6 @@ from noise_layers.noiser import Noiser
 
 torch.backends.cudnn.benchmark = True
 
-class CustomDataParallel(nn.DataParallel):
-    """Custom DataParallel to access the module methods."""
-
-    def __getattr__(self, key):
-        try:
-            return super().__getattr__(key)
-        except AttributeError:
-            return getattr(self.module, key)
-
 def configure_optimizers(net, args):
     """Separate parameters for the main optimizer and the auxiliary optimizer.
     Return two optimizers"""
@@ -172,6 +163,9 @@ def exec_train(args):
     net = mdloader.neural_compressor(args.model, args.quality, metric=args.metric, builtin_model=True, pretrained=True)
     net = net.to(args.device)
 
+    optimizer, aux_optimizer = configure_optimizers(net, args)
+    lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
+
     last_epoch = 1
     best_epoch = -1
     if args.checkpoint:  # load from previous checkpoint
@@ -183,19 +177,9 @@ def exec_train(args):
         state_dict = {rename_key(k): v for k, v in state_dict.items()}
         net.load_state_dict(state_dict)
 
-        if not args.disable_gpu and torch.cuda.device_count() > 1:
-            net = CustomDataParallel(net)
-        optimizer, aux_optimizer = configure_optimizers(net, args)
-        lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
         optimizer.load_state_dict(checkpoint['optimizer'])
         aux_optimizer.load_state_dict(checkpoint['aux_optimizer'])
         lr_scheduler.load_state_dict(checkpoint['lr_scheduler'])
-    else:
-        if not args.disable_gpu and torch.cuda.device_count() > 1:
-            net = CustomDataParallel(net)
-
-        optimizer, aux_optimizer = configure_optimizers(net, args)
-        lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min')
 
     criterion = RateDistortionLoss(lmbda=args.lmbda).to(args.device)
     adv_criterion = AdvRateDistortionLoss(adv_percep=args.adv_percep).to(args.device)
@@ -239,8 +223,8 @@ def exec_train(args):
                 total_loss = out_criterion['loss'] + curr_adv_param * out_criterion['adv_loss']
                 total_loss.backward()
                 
-                if args.clip_max_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(net.parameters(), args.clip_max_norm)
+                #if args.clip_max_norm > 0:
+                #    torch.nn.utils.clip_grad_norm_(net.parameters(), args.clip_max_norm)
 
                 optimizer.step()
 
@@ -384,7 +368,7 @@ if __name__ == '__main__':
     model_names = list(models.keys())
     parser = argparse.ArgumentParser(description=__file__)
     parser.add_argument('--train', dest='dispatch', action='store_const', const=exec_train, default=None, help='')
-    parser.add_argument('--model', '-m', default='bmshj2018-factorized', choices=model_names, help='Model architecture (default: %(default)s)')
+    parser.add_argument('--model', '-m', default='bmshj2018-hyperprior', choices=model_names, help='Model architecture (default: %(default)s)')
     parser.add_argument('--dataset', '-d', type=str, default='data/COCO', required=False, help='Training dataset')
     parser.add_argument('--name', type=str, default=None, required=False, help='name the training')
     parser.add_argument('--subset_ratio', '-r', type=float, default=0.2, help='subset ratio of dataset')
